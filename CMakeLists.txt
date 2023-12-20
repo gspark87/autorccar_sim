@@ -13,6 +13,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(autorccar_interfaces REQUIRED)
 
 # uncomment the following section in order to fill in
@@ -32,12 +33,15 @@ if(BUILD_TESTING)
 endif()
 
 add_executable(sim_sensor src/sensors.cpp)
+add_executable(sim_run src/simulation.cpp)
 
 ament_target_dependencies(sim_sensor rclcpp std_msgs nav_msgs sensor_msgs autorccar_interfaces)
+ament_target_dependencies(sim_run rclcpp std_msgs geometry_msgs)
 
 
 install(TARGETS
   sim_sensor
+  sim_run
   DESTINATION lib/${PROJECT_NAME})
 
 
