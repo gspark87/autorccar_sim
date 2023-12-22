@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    IMU:
+      gyro_noise: 0.1   # std (normal distribution)
+      accel_noise: 0.1  # std (normal distribution)
+
+    GNSS:
+      update_ms: 100 # [ms]
+      
+      init_lat: 37.5665  # [deg]
+      init_lng: 128.9780 # [deg]
+      init_height: 17.0    # [meter]
+      
+      global_position_noise: 0.1   # std (normal distribution)
+      global_velocity_noise: 0.05  # std (normal distribution)
+
+      local_position_noise: 0.1    # std (normal distribution)
+      local_velocity_noise: 0.05   # std (normal distribution)
+
+
+

@@ -32,17 +32,23 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-add_executable(sim_sensor src/sensors.cpp)
+add_executable(sim_sensors src/sensors.cpp)
 add_executable(sim_run src/simulation.cpp)
+add_executable(sim_keyboard src/keyboard.cpp)
 
-ament_target_dependencies(sim_sensor rclcpp std_msgs nav_msgs sensor_msgs autorccar_interfaces)
+ament_target_dependencies(sim_sensors rclcpp std_msgs nav_msgs sensor_msgs autorccar_interfaces)
 ament_target_dependencies(sim_run rclcpp std_msgs geometry_msgs)
+ament_target_dependencies(sim_keyboard rclcpp std_msgs geometry_msgs)
 
 
 install(TARGETS
-  sim_sensor
+  sim_sensors
   sim_run
+  sim_keyboard
   DESTINATION lib/${PROJECT_NAME})
 
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME})
 
 ament_package()

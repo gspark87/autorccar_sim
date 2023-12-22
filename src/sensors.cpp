@@ -20,12 +20,31 @@ using std::placeholders::_1;
 class Sensors : public rclcpp::Node {
 
 private:
+    void ReadParameters() {
+        double init_lat, init_lng, init_h;
+
+        get_parameter_or<float>("IMU.gyro_noise", param.gyro_noise, param.gyro_noise);
+        get_parameter_or<float>("IMU.accel_noise", param.accel_noise, param.accel_noise);
+        
+        get_parameter_or<int>("GNSS.update_ms", param.update_ms, param.update_ms);
+        get_parameter_or<double>("GNSS.init_lat", init_lat, init_lat);
+        get_parameter_or<double>("GNSS.init_lng", init_lng, init_lng);
+        get_parameter_or<double>("GNSS.init_height", init_h, init_h);
+        get_parameter_or<double>("GNSS.global_position_noise", param.global_position_noise, param.global_position_noise);
+        get_parameter_or<double>("GNSS.global_velocity_noise", param.global_velocity_noise, param.global_velocity_noise);
+        get_parameter_or<double>("GNSS.local_position_noise", param.local_position_noise, param.local_position_noise);
+        get_parameter_or<double>("GNSS.local_velocity_noise", param.local_velocity_noise, param.local_velocity_noise);
+
+        param.orgllh << init_lat*(M_PI/180), init_lng*(M_PI/180), init_h;
+    }
+
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom;
 
     rclcpp::Publisher<autorccar_interfaces::msg::Imu>::SharedPtr pub_imu;
-    rclcpp::Publisher<autorccar_interfaces::msg::Gnss>::SharedPtr pub_gnss;
+    rclcpp::Publisher<autorccar_interfaces::msg::Gnss>::SharedPtr pub_gnss_global;
+    rclcpp::Publisher<autorccar_interfaces::msg::Gnss>::SharedPtr pub_gnss_local;
 
     std::shared_ptr<rclcpp::Node> node_;
     
@@ -33,29 +52,48 @@ private:
         builtin_interfaces::msg::Time timestamp;
         Eigen::Vector3d pos;
         Eigen::Vector3d vel;
-    } gnss_data;
+    };
+    GNSS gnss_global;
+    GNSS gnss_local;
+
+    struct Parameters_ {
+        float gyro_noise;
+        float accel_noise;
+        int update_ms;
+        Eigen::Vector3d orgllh;
+        double global_position_noise;
+        double global_velocity_noise;
+        double local_position_noise;
+        double local_velocity_noise;
+    } param;
+
+    double gnss_period;
+    Eigen::Vector3d init_xyz;
+
 
 public:
-    Sensors() : Node("isaac_simulation") {
+    explicit Sensors(const rclcpp::NodeOptions& options) : Node("isaac_simulation", options) {
         sub_imu = this->create_subscription<sensor_msgs::msg::Imu>("isaac/imu", 10, std::bind(&Sensors::callback_imu, this, _1));
         sub_odom = this->create_subscription<nav_msgs::msg::Odometry>("isaac/odom", 10, std::bind(&Sensors::callback_odom, this, _1));
 
         pub_imu = this->create_publisher<autorccar_interfaces::msg::Imu>("sensors/imu", 10);
-        pub_gnss = this->create_publisher<autorccar_interfaces::msg::Gnss>("sensors/gnss", 10);
+        pub_gnss_global = this->create_publisher<autorccar_interfaces::msg::Gnss>("sensors/gnss_global", 10);
+        pub_gnss_local = this->create_publisher<autorccar_interfaces::msg::Gnss>("sensors/gnss_local", 10);
 
-        // Timer for the 10Hz publisher
-        timer_ = create_wall_timer(std::chrono::milliseconds(100), std::bind(&Sensors::publish_gnss, this));
+        ReadParameters();
+
+        timer_ = create_wall_timer(std::chrono::milliseconds(param.update_ms), std::bind(&Sensors::publish_gnss, this));
     }
+
 
     void callback_imu(const sensor_msgs::msg::Imu::SharedPtr msg) {
         autorccar_interfaces::msg::Imu sim_imu;
 
         std::random_device rd;
         std::default_random_engine generator(rd());
-        std::normal_distribution<double> noise_gyro(0.0, 0.1); // 평균 0, 표준편차 1
-        std::normal_distribution<double> noise_acc(0.0, 0.1); // 평균 0, 표준편차 1
+        std::normal_distribution<double> noise_gyro(0.0, param.gyro_noise); // (평균, 표준편차)
+        std::normal_distribution<double> noise_acc(0.0, param.accel_noise); // (평균, 표준편차)
         
-
         sim_imu.timestamp.sec = msg->header.stamp.sec;
         sim_imu.timestamp.nanosec = msg->header.stamp.nanosec;
 
@@ -70,16 +108,46 @@ public:
         pub_imu->publish(sim_imu);
     }
 
-    void callback_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    Eigen::Vector3d llh2xyz(Eigen::Vector3d &llh) {
 
-        Eigen::Vector3d orgllh, tmpxyz, pos_enu, difxyz, xyz;
+        Eigen::Vector3d xyz = Eigen::Vector3d::Zero();        
+        double phi, lambda, h;
+        double a, b, e;
+        double sinphi, cosphi, coslam, sinlam, tan2phi;
+        double tmp, tmpden, tmp2;
+        double x, y, z;
+
+        phi = llh(0);
+        lambda = llh(1);
+        h = llh(2);
+
+        a = 6378137.0000;
+        b = 6356752.3142;
+        e = sqrt(1-pow(b/a, 2));
+
+        sinphi = sin(phi);
+        cosphi = cos(phi);
+        sinlam = sin(lambda);
+        coslam = cos(lambda);
+        tan2phi = tan(phi)*tan(phi);
+        tmp = 1 - e*e;
+        tmpden = sqrt(1 + tmp*tan2phi);
+
+        x = (a*coslam)/tmpden + h*coslam*cosphi;
+        y = (a*sinlam)/tmpden + h*sinlam*cosphi;
+        tmp2 = sqrt(1-e*e*sinphi*sinphi);
+        z = (a*tmp*sinphi)/tmp2 + h*sinphi;
+        
+        xyz << x, y, z;
+
+        return xyz;
+    }
+
+    Eigen::Vector3d enu2xyz(Eigen::Vector3d &pos_enu, Eigen::Vector3d &orgllh) {
+        Eigen::Vector3d tmpxyz, difxyz, xyz;
         Eigen::Matrix3d R, inv_R;
 
-        orgllh << 37.5665*(M_PI/180), 128.9780*(M_PI/180), 17; // latitude(rad), longitude(rad), height(m)
-        tmpxyz << -304478.8, 404380.0, 386742.7;               // meter
-
-        // Robot forward (X) = North
-        pos_enu << -msg->pose.pose.position.y, msg->pose.pose.position.x, msg->pose.pose.position.z;
+        tmpxyz = llh2xyz(orgllh);
 
         double phi = orgllh(0);
         double lam = orgllh(1);
@@ -95,44 +163,74 @@ public:
         difxyz << inv_R * pos_enu;
         xyz = tmpxyz + pos_enu;
 
-        // NED Frame
-        gnss_data.timestamp.sec = msg->header.stamp.sec; // + msg->timestamp.nanosec * 1e-9;
-        gnss_data.timestamp.nanosec = msg->header.stamp.nanosec;
-        
-        gnss_data.pos << xyz(0), xyz(1), xyz(2);
+        return xyz;
+    }
 
-        gnss_data.vel << msg->twist.twist.linear.x,
-                         msg->twist.twist.linear.y,
-                         msg->twist.twist.linear.z;
+    void callback_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+
+        Eigen::Vector3d pos_enu, xyz;
+
+        // Robot forward (X) = North
+        pos_enu << -msg->pose.pose.position.y, msg->pose.pose.position.x, msg->pose.pose.position.z;
+        xyz = enu2xyz(pos_enu, param.orgllh);
+
+        // Global Position (ECEF)
+        gnss_global.timestamp.sec = msg->header.stamp.sec;
+        gnss_global.timestamp.nanosec = msg->header.stamp.nanosec;
+        gnss_global.pos << xyz(0), xyz(1), xyz(2);
+        gnss_global.vel << 0, 0, 0;
+
+        // Local Position (NED)
+        gnss_local.timestamp.sec = msg->header.stamp.sec;
+        gnss_local.timestamp.nanosec = msg->header.stamp.nanosec;
+        gnss_local.pos << pos_enu(1), pos_enu(0), -pos_enu(2);
+        gnss_local.vel << 0, 0, 0;
     }
 
     void publish_gnss() {
-        autorccar_interfaces::msg::Gnss sim_gnss; // ECEF
+        autorccar_interfaces::msg::Gnss sim_gnss_global; // ECEF
+        autorccar_interfaces::msg::Gnss sim_gnss_local;  // NED
 
         std::random_device rd;
         std::default_random_engine generator(rd());
-        std::normal_distribution<double> distribution(0.0, 0.1); // 평균 0, 표준편차 1
+        std::normal_distribution<double> noise_global_pos(0.0, param.global_position_noise); // (평균, 표준편차)
+        std::normal_distribution<double> noise_global_vel(0.0, param.local_velocity_noise);  // (평균, 표준편차)
+        std::normal_distribution<double> noise_local_pos(0.0, param.local_position_noise);   // (평균, 표준편차)
+        std::normal_distribution<double> noise_local_vel(0.0, param.local_velocity_noise);   // (평균, 표준편차)
 
-        sim_gnss.timestamp.sec = gnss_data.timestamp.sec;
-        sim_gnss.timestamp.nanosec = gnss_data.timestamp.nanosec;
+        // Global
+        sim_gnss_global.timestamp.sec = gnss_global.timestamp.sec;
+        sim_gnss_global.timestamp.nanosec = gnss_global.timestamp.nanosec;
 
-        sim_gnss.position_ecef.x = gnss_data.pos[0] + distribution(generator);
-        sim_gnss.position_ecef.y = gnss_data.pos[1] + distribution(generator);
-        sim_gnss.position_ecef.z = gnss_data.pos[2] + distribution(generator);
+        sim_gnss_global.position_ecef.x = gnss_global.pos[0] + noise_global_pos(generator);  // ECEF X
+        sim_gnss_global.position_ecef.y = gnss_global.pos[1] + noise_global_pos(generator);  // ECEF Y
+        sim_gnss_global.position_ecef.z = gnss_global.pos[2] + noise_global_pos(generator);  // ECEF Z
 
-        sim_gnss.velocity_ecef.x = 0;
-        sim_gnss.velocity_ecef.y = 0;
-        sim_gnss.velocity_ecef.z = 0;
+        sim_gnss_global.velocity_ecef.x = gnss_global.vel[0] + noise_global_vel(generator);
+        sim_gnss_global.velocity_ecef.y = gnss_global.vel[1] + noise_global_vel(generator);
+        sim_gnss_global.velocity_ecef.z = gnss_global.vel[2] + noise_global_vel(generator);
         
-        pub_gnss->publish(sim_gnss);
-    }    
+        // Local
+        sim_gnss_local.timestamp.sec = gnss_local.timestamp.sec;
+        sim_gnss_local.timestamp.nanosec = gnss_local.timestamp.nanosec;
 
+        sim_gnss_local.position_ecef.x = gnss_local.pos[0] + noise_local_pos(generator);  // North
+        sim_gnss_local.position_ecef.y = gnss_local.pos[1] + noise_local_pos(generator);  // East
+        sim_gnss_local.position_ecef.z = gnss_local.pos[2] + noise_local_pos(generator);  // Down
+
+        sim_gnss_local.velocity_ecef.x = gnss_local.vel[0] + noise_local_vel(generator);
+        sim_gnss_local.velocity_ecef.y = gnss_local.vel[1] + noise_local_vel(generator);
+        sim_gnss_local.velocity_ecef.z = gnss_local.vel[2] + noise_local_vel(generator);
+
+        pub_gnss_global->publish(sim_gnss_global);
+        pub_gnss_local->publish(sim_gnss_local);
+    }    
 };
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<Sensors>());
-
+  auto options = rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true);
+  rclcpp::spin(std::make_shared<Sensors>(options));
   rclcpp::shutdown();
   return 0;
 }

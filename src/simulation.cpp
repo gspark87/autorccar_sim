@@ -9,10 +9,8 @@ class Simulation : public rclcpp::Node {
 
 private:
     void publish_cmd_vel(double duration, double linear_x, double angular_z) {
-        // auto start_time = std::chrono::system_clock::now();
-        auto start_time = this->get_clock()->now();
-        auto end_time = start_time + rclcpp::Duration::from_seconds(duration);
-        rclcpp::Rate rate(1);  // 1 Hz rate로 설정
+        auto end_time = this->get_clock()->now() + rclcpp::Duration::from_seconds(duration);
+        rclcpp::Rate rate(10);
 
         while (this->get_clock()->now() < end_time) {
             geometry_msgs::msg::Twist cmd;
@@ -57,11 +55,9 @@ public:
 
         publish_cmd_vel(5, 6, 0);
 
-        publish_cmd_vel(10, 0, 0);
+        publish_cmd_vel(2, 0, 0);
 
-        RCLCPP_INFO(this->get_logger(), "Simulation Done...");
-        rclcpp::shutdown();
-        
+        RCLCPP_INFO(this->get_logger(), "Simulation Done...");       
     }
 
 
